@@ -1,0 +1,4 @@
+libcirkit @ git+https://github.com/GianpieroTulipani/cirkit.git@data-driven-initialization
+torchvision
+tqdm
+psutil
