@@ -27,7 +27,7 @@ K_UNITS = 64
 TOTAL_EXPERIMENTS = 24
 EXPERIMENTS_PER_GPU = 4
 MAX_EPOCHS = 100
-LEARNING_CURVE_EVERY_STEPS = 100
+LEARNING_CURVE_EVERY_STEPS = 250
 DASHBOARD_EVERY_STEPS = 10
 ```
 
@@ -75,7 +75,7 @@ python -m scripts.evaluate_image_circuit \
     --use-estimated-weights --alpha 5.0 --noise-scale 2.0 \
     --k 64 --seed 42 --split-seed 42 \
     --max-epochs 100 --no-early-stopping \
-    --wandb --validation-steps 100 --progress-steps 10 \
+    --wandb --validation-steps 250 --progress-steps 10 \
     --save-path mnist_quad-tree-2_data-init_k64_seed42.pt
 ```
 
@@ -90,7 +90,7 @@ python -m scripts.run_learning_curves \
     --max-experiments 24 \
     --k 64 \
     --max-epochs 100 \
-    --validation-steps 100 \
+    --validation-steps 250 \
     --progress-steps 10 \
     --project pc_dataset_eval
 ```

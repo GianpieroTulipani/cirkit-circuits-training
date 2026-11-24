@@ -474,7 +474,7 @@ def build_parser() -> argparse.ArgumentParser:
     add("--max-epochs", type=int, default=100)
     add("--max-steps", type=int, help="Optional cap on optimizer updates.")
     add(
-        "--validation-steps", type=int, default=100,
+        "--validation-steps", type=int, default=250,
         help="Evaluate and log learning curves every N optimizer updates.",
     )
     add(
