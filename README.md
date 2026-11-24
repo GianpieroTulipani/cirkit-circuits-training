@@ -37,16 +37,19 @@ not create eight GPUs. If memory is exhausted or throughput gets worse, reduce t
 value to 2 or 1.
 
 The notebook checks the GPU count, installs the repository requirements, authenticates
-W&B through the Kaggle secret and previews the exact commands before training.
+W&B through the Kaggle secret and shows a compact campaign preview before training.
 
 ## Progress and outputs
 
-The launcher displays:
+The Kaggle notebook keeps one live dashboard that is replaced every second. It displays:
 
-- one overall experiment-completion bar;
-- one progress bar for every active GPU slot;
-- the experiment assigned to each GPU;
-- GPU occupancy, queued experiments and failures.
+- GPU 0 and GPU 1 as separate sections;
+- only the experiments currently assigned to each GPU;
+- optimizer-step progress, percentage and elapsed time;
+- compact completed, queued and failed counters.
+
+Training output is redirected to per-experiment files, so notebook cells do not grow
+with epoch logs or completed experiments.
 
 Every run creates a timestamped directory under `/kaggle/working/results` containing:
 
@@ -95,8 +98,9 @@ python -m scripts.run_learning_curves \
     --project pc_dataset_eval
 ```
 
-Use `--dry-run` to inspect all generated commands without downloading data or
-starting training.
+Use `--dry-run` for a compact configuration summary without downloading data or
+starting training. Add `--list-commands` only when the full generated command list
+is needed.
 
 ## Reproducibility
 

@@ -131,7 +131,7 @@ def _status_payload(
 def run_queue(
     commands: list[list[str]], slots: list[str], output_dir: Path, show_progress: bool
 ) -> int:
-    """Refill GPU slots and show one live progress bar for every concurrent process."""
+    """Refill GPU slots and show only the experiments currently occupying a GPU."""
     pending = deque(commands)
     active: dict[int, dict] = {}
     results: list[dict] = []
@@ -158,11 +158,9 @@ def run_queue(
             )
 
     def announce(message: str) -> None:
-        if show_progress:
-            from tqdm.auto import tqdm
-
-            tqdm.write(message)
-        else:
+        # A live dashboard must not grow by one line whenever a process starts or
+        # finishes. Plain status messages are kept for redirected/headless logs.
+        if not show_progress:
             print(message, flush=True)
 
     def refresh_dashboard() -> None:
@@ -177,7 +175,9 @@ def run_queue(
                 bar.set_postfix_str(f"{elapsed / 60:.1f}m")
                 bar.refresh()
         payload = _status_payload(pending, active, results, slots)
-        status_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temporary_status = status_path.with_suffix(".json.tmp")
+        temporary_status.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temporary_status.replace(status_path)
         if overall is not None:
             gpu_capacity = Counter(slots)
             gpu_active = Counter(run["gpu"] for run in active.values())
@@ -319,7 +319,17 @@ def main() -> int:
         default=PROJECT_ROOT / "notebooks" / "data-driven-initialization.ipynb",
     )
     parser.add_argument("--output-dir", type=Path, default=Path("results"))
+    parser.add_argument(
+        "--run-dir",
+        type=Path,
+        help="Use this exact campaign directory instead of creating one under --output-dir.",
+    )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--list-commands",
+        action="store_true",
+        help="With --dry-run, print every generated experiment command.",
+    )
     parser.add_argument("--no-progress", action="store_true")
     args = parser.parse_args()
     for option in (
@@ -364,8 +374,15 @@ def main() -> int:
         f"({args.jobs_per_gpu} per GPU)"
     )
     if args.dry_run:
-        for command in commands:
-            print(shlex.join(command))
+        print(
+            f"Queue: {len(commands)} experiments; initial occupancy: "
+            + ", ".join(
+                f"GPU {gpu}={args.jobs_per_gpu}" for gpu in args.gpus
+            )
+        )
+        if args.list_commands:
+            for command in commands:
+                print(shlex.join(command))
         return 0
 
     import torch
@@ -388,10 +405,13 @@ def main() -> int:
             flush=True,
         )
 
-    output_dir = args.output_dir.resolve() / datetime.now().strftime(
-        "curves-%Y%m%d-%H%M%S-%f"
+    output_dir = (
+        args.run_dir.resolve()
+        if args.run_dir is not None
+        else args.output_dir.resolve()
+        / datetime.now().strftime("curves-%Y%m%d-%H%M%S-%f")
     )
-    output_dir.mkdir(parents=True)
+    output_dir.mkdir(parents=True, exist_ok=False)
     print(f"Logs, checkpoints and run-status.json: {output_dir}", flush=True)
     # Download sequentially before workers start to avoid concurrent extraction.
     datasets = sorted({cmd[cmd.index("--dataset") + 1] for cmd in commands})
