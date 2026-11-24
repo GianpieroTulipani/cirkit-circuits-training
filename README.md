@@ -41,11 +41,12 @@ W&B through the Kaggle secret and shows a compact campaign preview before traini
 
 ## Progress and outputs
 
-The Kaggle notebook keeps one live dashboard that is replaced every second. It displays:
+The Kaggle notebook keeps one ordered live dashboard that is replaced every second. It displays:
 
-- GPU 0 and GPU 1 as separate sections;
+- GPU 0 and GPU 1 as separate side-by-side sections;
 - only the experiments currently assigned to each GPU;
-- optimizer-step progress, percentage and elapsed time;
+- stable slot numbers and short dataset, structure, initialization, K and seed labels;
+- optimizer-step progress, percentage and elapsed time for every active slot;
 - compact completed, queued and failed counters.
 
 Training output is redirected to per-experiment files, so notebook cells do not grow
