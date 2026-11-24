@@ -6,3 +6,4 @@ datasets/
 *.pt
 wandb/
 .verification/
+results/

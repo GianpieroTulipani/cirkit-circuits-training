@@ -2,3 +2,4 @@ libcirkit @ git+https://github.com/GianpieroTulipani/cirkit.git@data-driven-init
 torchvision
 tqdm
 psutil
+wandb

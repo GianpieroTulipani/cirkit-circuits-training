@@ -1,71 +1,115 @@
 # cirkit-circuits-training
 
-Script for training and evaluating categorical circuits on images using Cirkit's
-`data-driven-initialization` branch. The library provides models and initialization;
-this project handles data loading, training, and evaluation.
+Training and evaluation of categorical image circuits with Cirkit, including a
+Kaggle notebook for parallel learning-curve experiments on two T4 GPUs.
 
-## Installation and usage
+## Project structure
 
-From this project's directory:
+- `scripts/evaluate_image_circuit.py`: trains and evaluates one experiment.
+- `scripts/run_learning_curves.py`: schedules several experiments across GPUs.
+- `notebooks/data-driven-initialization.ipynb`: defines the 24-experiment matrix.
+- `notebooks/kaggle-parallel-learning-curves.ipynb`: interactive Kaggle entry point.
+- `tests/test_parallel_launcher.py`: tests configuration overrides, scheduling and
+  progress reporting without requiring GPUs.
+
+## Run on Kaggle
+
+1. Push the current repository changes to GitHub.
+2. Upload `notebooks/kaggle-parallel-learning-curves.ipynb` to Kaggle.
+3. Enable Internet and select **GPU T4 x2**.
+4. Add `WANDB_API_KEY` under **Add-ons > Secrets** and enable it for the notebook.
+5. Edit the first configuration cell, then use **Run All**.
+
+The main parameters are:
+
+```python
+K_UNITS = 64
+TOTAL_EXPERIMENTS = 24
+EXPERIMENTS_PER_GPU = 4
+MAX_EPOCHS = 100
+LEARNING_CURVE_EVERY_STEPS = 100
+DASHBOARD_EVERY_STEPS = 10
+```
+
+Kaggle supplies two physical T4 GPUs. With `EXPERIMENTS_PER_GPU = 4`, the launcher
+runs eight concurrent processes: four share GPU 0 and four share GPU 1. This does
+not create eight GPUs. If memory is exhausted or throughput gets worse, reduce the
+value to 2 or 1.
+
+The notebook checks the GPU count, installs the repository requirements, authenticates
+W&B through the Kaggle secret and previews the exact commands before training.
+
+## Progress and outputs
+
+The launcher displays:
+
+- one overall experiment-completion bar;
+- one progress bar for every active GPU slot;
+- the experiment assigned to each GPU;
+- GPU occupancy, queued experiments and failures.
+
+Every run creates a timestamped directory under `/kaggle/working/results` containing:
+
+- one checkpoint and console log per experiment;
+- `run-status.json` with active step counts, GPU assignment and final results.
+
+`--progress-steps` controls only the notebook dashboard. W&B learning curves are
+controlled independently by `--validation-steps` and include step 0, periodic
+train/validation NLL and BPD, learning rate, and the final step.
+
+## Local usage
+
+Install the dependencies:
 
 ```bash
 python -m pip install -r requirements.txt
-python -m scripts.evaluate_image_circuit --help
 ```
 
-MNIST example using the same arguments as the notebook:
+Run one data-initialized MNIST experiment:
 
 ```bash
 python -m scripts.evaluate_image_circuit \
-    --rg quad-tree-2 --dataset mnist \
+    --dataset mnist --rg quad-tree-2 \
     --input-sharing none --ycc none \
     --activation none --inner-layer cp --use-mixing-weights \
     --use-estimated-weights --alpha 5.0 --noise-scale 2.0 \
-    --k 128 --seed 42 \
-    --save-path mnist_quad-tree-2_data-init_k128_seed42.pt
+    --k 64 --seed 42 --split-seed 42 \
+    --max-epochs 100 --no-early-stopping \
+    --wandb --validation-steps 100 --progress-steps 10 \
+    --save-path mnist_quad-tree-2_data-init_k64_seed42.pt
 ```
 
-The multiline command uses Bash syntax, also supported in Colab/Kaggle `!` cells.
-In PowerShell, run it on a single line.
-Remove `--use-estimated-weights` to use random initialization.
-For Weights & Biases, also install `wandb` and add `--wandb`.
+Remove `--use-estimated-weights` for random initialization.
 
-MNIST, Fashion-MNIST, and CIFAR-10 are downloaded through torchvision.
-For local data, use `--dataset tensor --root PATH`: you need `train.pt` and
-either `test.pt` or `valid.pt`. If `valid.pt` is missing, the validation set is split
-from the training set. If `test.pt` is missing, `valid.pt` is also used for the final
-evaluation, as in the original script. Files can contain tensors of shape `(N,C,H,W)`
-or `(N,D)`; for the latter, specify `--image-shape C H W`.
+Run the full matrix directly from a two-GPU environment:
 
-## Notebook on Kaggle or Colab
-
-[The updated notebook](notebooks/data-driven-initialization.ipynb) preserves the
-experiments and saved outputs from the supplied notebook. The new setup cell
-downloads this project, changes to its directory, and installs its dependencies.
-The `!python -m scripts.evaluate_image_circuit ...` cells remain unchanged.
-The setup cell clones the repository from
-`https://github.com/GianpieroTulipani/cirkit-circuits-training.git`: update the URL
-if you choose a different name. On Kaggle, enable Internet to clone the repository
-and download the data.
-
-There is no need to clone Cirkit separately: `requirements.txt` installs it directly
-from the branch. Existing outputs document previous runs; the updated notebook has
-not been rerun in full. The setup cell reuses an existing clone without updating it
-automatically.
-
-## Linking from the Cirkit branch
-
-The training project depends on the library. There is no need to add the training
-project to Cirkit's dependencies or move the script back into the library.
-In Cirkit's notebook, you can use the same setup cell as the notebook provided here,
-or link directly to this notebook from the documentation:
-
-```markdown
-Training and evaluation experiments are available in the
-[cirkit-circuits-training project](https://github.com/GianpieroTulipani/cirkit-circuits-training),
-with a [notebook for Kaggle and Colab](https://github.com/GianpieroTulipani/cirkit-circuits-training/blob/main/notebooks/data-driven-initialization.ipynb).
+```bash
+python -m scripts.run_learning_curves \
+    --gpus 0 1 \
+    --jobs-per-gpu 4 \
+    --max-experiments 24 \
+    --k 64 \
+    --max-epochs 100 \
+    --validation-steps 100 \
+    --progress-steps 10 \
+    --project pc_dataset_eval
 ```
 
-The notebook already present in the local Cirkit checkout is a different MNIST
-example from the one supplied in Downloads. The updated copy here is based on the
-supplied file; it does not automatically replace that other example.
+Use `--dry-run` to inspect all generated commands without downloading data or
+starting training.
+
+## Reproducibility
+
+- `--split-seed` fixes the train/validation split.
+- `--seed` fixes model initialization and minibatch ordering.
+- The notebook can set `REPOSITORY_REF` to a commit SHA.
+- Checkpoints, logs and W&B runs are separate for every experiment.
+
+For exact long-term reproduction, pin the Cirkit revision and Python dependency
+versions before the final campaign.
+
+## Tests
+
+```bash
+python -m unittest tests.test_parallel_launcher -v
+```

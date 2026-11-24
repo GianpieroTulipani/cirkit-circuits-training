@@ -177,7 +177,9 @@ def load_discrete_image_dataset(
                 f"valid_split={args.valid_split} gives train/val sizes {n_train}/{n_val}; "
                 "use a larger dataset or a split in (0, 1)"
             )
-        indices = torch.randperm(len(train), generator=torch.Generator().manual_seed(args.seed))
+        indices = torch.randperm(
+            len(train), generator=torch.Generator().manual_seed(args.split_seed)
+        )
         train, valid = train[indices[:n_train]], train[indices[n_train:]]
 
     return train.to(torch.uint8), valid.to(torch.uint8), test.to(torch.uint8), shape
@@ -218,6 +220,8 @@ def train_circuit(
 ):
     """Train with the CLI settings, saving the best validation checkpoint."""
     max_steps = len(train_loader) * args.max_epochs
+    if args.max_steps is not None:
+        max_steps = min(max_steps, args.max_steps)
     # Project only raw sum weights; categorical input logits stay unconstrained.
     projected_sum_params = _sum_parameters_to_project(circuit, args.activation)
     _project_positive(projected_sum_params)
@@ -236,9 +240,49 @@ def train_circuit(
     avg_val_nll = None
     saved_best = False
 
-    print(f"Starting training for a maximum of {max_steps} steps.\n")
+    def emit_progress(step: int) -> None:
+        """Emit a stable line that the multi-GPU launcher can parse."""
+        print(
+            f"EXPERIMENT_PROGRESS step={step} max_steps={max_steps}",
+            flush=True,
+        )
 
-    while total_steps < max_steps and checks_no_improve < args.patience:
+    # Evaluate the same small training sample at every point, at the current weights.
+    # A separate generator keeps evaluation from consuming the training RNG stream.
+    if args.wandb:
+        train_data = train_loader.dataset.tensors[0]
+        probe_indices = torch.randperm(
+            len(train_data), generator=torch.Generator().manual_seed(args.split_seed)
+        )[:1024]
+        train_eval_loader = DataLoader(
+            TensorDataset(train_data[probe_indices]),
+            batch_size=args.batch_size,
+            generator=torch.Generator().manual_seed(args.split_seed),
+        )
+
+    def log_curves(step: int, val_nll: float) -> None:
+        train_nll = _mean_nll(nll_fn, train_eval_loader, device)
+        _log_wandb(
+            {
+                "step": step,
+                "train_nll": train_nll,
+                "train_bpd": train_nll / (num_dimensions * np.log(2.0)),
+                "val_nll": val_nll,
+                "val_bpd": val_nll / (num_dimensions * np.log(2.0)),
+                "learning_rate": optimizer.param_groups[0]["lr"],
+            }
+        )
+
+    if args.wandb:
+        circuit.eval()
+        log_curves(0, _mean_nll(nll_fn, val_loader, device))
+
+    print(f"Starting training for a maximum of {max_steps} steps.\n")
+    emit_progress(0)
+
+    while total_steps < max_steps and (
+        args.no_early_stopping or checks_no_improve < args.patience
+    ):
         circuit.train()
         # Keep detached metrics on-device; .item() per batch would synchronize CUDA.
         train_loss_sum = torch.zeros((), dtype=torch.float64, device=device)
@@ -261,7 +305,10 @@ def train_circuit(
 
             total_steps += 1
 
-            if total_steps % args.validation_steps == 0:
+            if total_steps % args.progress_steps == 0 or total_steps == max_steps:
+                emit_progress(total_steps)
+
+            if total_steps % args.validation_steps == 0 or total_steps == max_steps:
                 circuit.eval()
                 avg_train_nll = train_loss_sum.item() / train_count
                 avg_val_nll = _mean_nll(nll_fn, val_loader, device)
@@ -269,15 +316,7 @@ def train_circuit(
                 bpd_val = avg_val_nll / (num_dimensions * np.log(2.0))
 
                 if args.wandb:
-                    _log_wandb(
-                        {
-                            "step": total_steps,
-                            "train_nll": avg_train_nll,
-                            "train_bpd": bpd_train,
-                            "val_nll": avg_val_nll,
-                            "val_bpd": bpd_val,
-                        }
-                    )
+                    log_curves(total_steps, avg_val_nll)
 
                 # Keep the original tolerance and tie handling for checkpoint selection.
                 if avg_val_nll - args.min_delta <= best_val_nll:
@@ -303,7 +342,7 @@ def train_circuit(
                         args.patience,
                     )
 
-                if checks_no_improve >= args.patience:
+                if not args.no_early_stopping and checks_no_improve >= args.patience:
                     logger.info("Early stopping triggered.")
                     break
 
@@ -322,8 +361,8 @@ def train_circuit(
         metrics = {"saved_best_checkpoint": saved_best}
         if avg_val_nll is not None:
             metrics.update(
-                final_train_nll=avg_train_nll,
-                final_train_bpd=bpd_train,
+                final_online_train_nll=avg_train_nll,
+                final_online_train_bpd=bpd_train,
                 final_val_nll=avg_val_nll,
                 final_val_bpd=bpd_val,
                 best_val_nll=best_val_nll,
@@ -408,7 +447,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     add("--inner-layer", default="cp", choices=["cp", "cp-t", "tucker"])
-    add("--k", type=int, default=512)
+    add("--k", type=int, default=64)
     add(
         "--activation",
         default="none",
@@ -432,8 +471,17 @@ def build_parser() -> argparse.ArgumentParser:
     add("--eta-min", type=float, default=0.0001)
     add("--weight-decay", type=float, default=0.0)
     add("--batch-size", type=int, default=256)
-    add("--max-epochs", type=int, default=200)
-    add("--validation-steps", type=int, default=250)
+    add("--max-epochs", type=int, default=100)
+    add("--max-steps", type=int, help="Optional cap on optimizer updates.")
+    add(
+        "--validation-steps", type=int, default=100,
+        help="Evaluate and log learning curves every N optimizer updates.",
+    )
+    add(
+        "--progress-steps", type=int, default=10,
+        help="Emit launcher progress every N optimizer updates without logging W&B metrics.",
+    )
+    add("--no-early-stopping", action="store_true", help="Train for the full step/epoch budget.")
     add("--patience", type=int, default=5)
     add("--min-delta", type=float, default=0.0)
     add("--valid-split", type=float, default=0.05)
@@ -455,6 +503,7 @@ def build_parser() -> argparse.ArgumentParser:
     add("--project", default="pc_dataset_eval")
 
     add("--seed", type=int, default=42)
+    add("--split-seed", type=int, help="Fixed train/validation split seed; defaults to --seed.")
     add("--save-path", default="best_circuit.pt")
     return parser
 
@@ -463,6 +512,14 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = build_parser()
     args = parser.parse_args()
+    if args.split_seed is None:
+        args.split_seed = args.seed
+    if args.validation_steps <= 0 or args.progress_steps <= 0 or args.max_epochs <= 0:
+        parser.error("--validation-steps, --progress-steps and --max-epochs must be positive")
+    if args.max_steps is not None and args.max_steps <= 0:
+        parser.error("--max-steps must be positive")
+    if args.patience <= 0 and not args.no_early_stopping:
+        parser.error("--patience must be positive when early stopping is enabled")
     if args.num_bins is not None and not 1 <= args.num_bins <= 256:
         parser.error("--num-bins must be between 1 and 256")
     if args.mi_chunk_size is not None and args.mi_chunk_size <= 0:
@@ -480,8 +537,18 @@ def main() -> None:
     if args.wandb:
         import wandb
 
-        wandb.login()
-        run = wandb.init(project=args.project, config=vars(args))
+        method = "data-init" if args.use_estimated_weights else "random-init"
+        comparison = f"{args.dataset}_{args.rg}_k{args.k}"
+        run = wandb.init(
+            project=args.project,
+            name=f"{comparison}_{method}_seed{args.seed}",
+            group=comparison,
+            job_type=method,
+            config={**vars(args), "initialization": method, "train_curve_max_samples": 1024},
+        )
+        run.define_metric("step")
+        for metric in ("train_nll", "train_bpd", "val_nll", "val_bpd", "learning_rate"):
+            run.define_metric(metric, step_metric="step")
     else:
         run = None
 
@@ -508,9 +575,18 @@ def main() -> None:
         args.ycc,
         args.input_sharing,
     )
-    train_loader = DataLoader(TensorDataset(train_data), batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(TensorDataset(val_data), batch_size=args.batch_size, shuffle=False)
-    test_loader = DataLoader(TensorDataset(test_data), batch_size=args.batch_size, shuffle=False)
+    train_loader = DataLoader(
+        TensorDataset(train_data), batch_size=args.batch_size, shuffle=True,
+        generator=torch.Generator().manual_seed(args.seed),
+    )
+    val_loader = DataLoader(
+        TensorDataset(val_data), batch_size=args.batch_size, shuffle=False,
+        generator=torch.Generator().manual_seed(args.split_seed),
+    )
+    test_loader = DataLoader(
+        TensorDataset(test_data), batch_size=args.batch_size, shuffle=False,
+        generator=torch.Generator().manual_seed(args.split_seed),
+    )
 
     logger.info("Using %d samples to build/estimate the circuit", len(train_data))
     initialization = (
