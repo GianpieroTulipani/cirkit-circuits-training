@@ -14,6 +14,8 @@ import time
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROGRESS_RE = re.compile(r"EXPERIMENT_PROGRESS step=(\d+) max_steps=(\d+)")
+DATASETS = ("mnist", "fashion-mnist", "cifar10")
+REGION_GRAPHS = ("quad-tree-2", "quad-tree-4", "quad-graph", "chow-liu-tree")
 
 
 def notebook_commands(notebook: Path) -> list[list[str]]:
@@ -44,6 +46,59 @@ def _checkpoint_name(command: list[str]) -> str:
     return Path(command[command.index("--save-path") + 1]).stem
 
 
+def _option_value(command: list[str], option: str) -> str:
+    """Return a required option value from a generated training command."""
+    try:
+        return command[command.index(option) + 1]
+    except (ValueError, IndexError) as error:
+        raise ValueError(f"Generated command is missing {option}: {shlex.join(command)}") from error
+
+
+def select_commands(
+    commands: list[list[str]], *, dataset: str, region_graphs: list[str]
+) -> list[list[str]]:
+    """Select complete data-init/random-init comparisons for one dataset."""
+    selected = []
+    for rg in region_graphs:
+        selected.extend(
+            command
+            for command in commands
+            if _option_value(command, "--dataset") == dataset
+            and _option_value(command, "--rg") == rg
+        )
+    expected = 2 * len(region_graphs)
+    if len(selected) != expected:
+        raise ValueError(
+            f"Expected {expected} experiments for dataset={dataset} and RGs={region_graphs}, "
+            f"but found {len(selected)}"
+        )
+    for rg in region_graphs:
+        pair = [command for command in selected if _option_value(command, "--rg") == rg]
+        methods = {
+            "data-init" if "--use-estimated-weights" in command else "random-init"
+            for command in pair
+        }
+        if methods != {"data-init", "random-init"}:
+            raise ValueError(f"Incomplete initialization pair for dataset={dataset}, rg={rg}")
+    return selected
+
+
+def _format_project(template: str, command: list[str]) -> str:
+    """Build the W&B project name for a dataset/RG comparison."""
+    if "{" not in template:
+        return template
+    values = {
+        "dataset": _option_value(command, "--dataset"),
+        "rg": _option_value(command, "--rg"),
+    }
+    try:
+        return template.format(**values)
+    except KeyError as error:
+        raise ValueError(
+            f"Unknown W&B project-template field {error.args[0]!r}; use {{dataset}} and {{rg}}"
+        ) from error
+
+
 def configure_commands(
     commands: list[list[str]],
     *,
@@ -71,7 +126,7 @@ def configure_commands(
             _set_option(command, "--validation-steps", validation_steps)
         _set_option(command, "--progress-steps", progress_steps)
         if project is not None:
-            _set_option(command, "--project", project)
+            _set_option(command, "--project", _format_project(project, command))
         configured.append(command)
     return configured
 
@@ -307,12 +362,38 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gpus", nargs="+", default=["0", "1"])
     parser.add_argument("--jobs-per-gpu", type=int, default=2)
-    parser.add_argument("--max-experiments", type=int)
+    parser.add_argument(
+        "--dataset",
+        choices=DATASETS,
+        default="mnist",
+        help="Run only this dataset; every selected RG gets a data-init/random-init pair.",
+    )
+    parser.add_argument(
+        "--region-graphs",
+        nargs="+",
+        choices=REGION_GRAPHS,
+        default=list(REGION_GRAPHS),
+        help="Region graphs to compare for the selected dataset.",
+    )
+    parser.add_argument(
+        "--max-experiments",
+        type=int,
+        help="Optional even debug cap; full campaigns should omit it.",
+    )
     parser.add_argument("--k", type=int, help="Override k for every selected experiment.")
     parser.add_argument("--max-epochs", type=int, help="Override the notebook epoch budget.")
     parser.add_argument("--validation-steps", type=int)
     parser.add_argument("--progress-steps", type=int, default=10)
-    parser.add_argument("--project", help="Override the W&B project.")
+    project_group = parser.add_mutually_exclusive_group()
+    project_group.add_argument(
+        "--project-template",
+        default="pc_{dataset}_{rg}_eval",
+        help="W&B project template; supports {dataset} and {rg}.",
+    )
+    project_group.add_argument(
+        "--project",
+        help="Legacy static W&B project override; puts every selected comparison together.",
+    )
     parser.add_argument(
         "--notebook",
         type=Path,
@@ -345,8 +426,14 @@ def main() -> int:
             parser.error(f"--{option.replace('_', '-')} must be positive")
     if len(set(args.gpus)) != len(args.gpus):
         parser.error("--gpus must contain distinct GPU identifiers")
+    if args.max_experiments is not None and args.max_experiments % 2:
+        parser.error("--max-experiments must be even to preserve initialization pairs")
 
-    commands = notebook_commands(args.notebook)
+    commands = select_commands(
+        notebook_commands(args.notebook),
+        dataset=args.dataset,
+        region_graphs=args.region_graphs,
+    )
     if args.max_experiments is not None:
         if args.max_experiments > len(commands):
             parser.error(
@@ -360,14 +447,19 @@ def main() -> int:
         max_epochs=args.max_epochs,
         validation_steps=args.validation_steps,
         progress_steps=args.progress_steps,
-        project=args.project,
+        project=args.project or args.project_template,
     )
 
     slots = [gpu for gpu in args.gpus for _ in range(args.jobs_per_gpu)]
     names = [_checkpoint_name(command) for command in commands]
     if len(names) != len(set(names)):
         parser.error("Experiment checkpoint names must be unique")
-    print(f"{len(commands)} experiments; {len(slots)} process slots across GPUs {args.gpus}")
+    print(
+        f"Dataset {args.dataset}; RGs {args.region_graphs}; "
+        f"{len(commands)} experiments; {len(slots)} process slots across GPUs {args.gpus}"
+    )
+    projects = sorted({_option_value(command, "--project") for command in commands})
+    print("W&B projects: " + ", ".join(projects))
     print(
         "Physical GPUs: "
         f"{len(args.gpus)}; concurrent experiments: {len(slots)} "

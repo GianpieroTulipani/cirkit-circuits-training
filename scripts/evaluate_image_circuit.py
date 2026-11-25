@@ -239,6 +239,7 @@ def train_circuit(
     total_steps = 0
     avg_val_nll = None
     saved_best = False
+    initial_val_nll = None
 
     def emit_progress(step: int) -> None:
         """Emit a stable line that the multi-GPU launcher can parse."""
@@ -247,29 +248,15 @@ def train_circuit(
             flush=True,
         )
 
-    # Evaluate the same small training sample at every point, at the current weights.
-    # A separate generator keeps evaluation from consuming the training RNG stream.
-    if args.wandb:
-        train_data = train_loader.dataset.tensors[0]
-        probe_indices = torch.randperm(
-            len(train_data), generator=torch.Generator().manual_seed(args.split_seed)
-        )[:1024]
-        train_eval_loader = DataLoader(
-            TensorDataset(train_data[probe_indices]),
-            batch_size=args.batch_size,
-            generator=torch.Generator().manual_seed(args.split_seed),
-        )
-
     def log_curves(step: int, val_nll: float) -> None:
-        train_nll = _mean_nll(nll_fn, train_eval_loader, device)
+        nonlocal initial_val_nll
+        if initial_val_nll is None:
+            initial_val_nll = val_nll
         _log_wandb(
             {
                 "step": step,
-                "train_nll": train_nll,
-                "train_bpd": train_nll / (num_dimensions * np.log(2.0)),
                 "val_nll": val_nll,
-                "val_bpd": val_nll / (num_dimensions * np.log(2.0)),
-                "learning_rate": optimizer.param_groups[0]["lr"],
+                "val_nll_relative": val_nll / initial_val_nll,
             }
         )
 
@@ -357,23 +344,8 @@ def train_circuit(
             "No validation checkpoint was saved; saved current model to %s.", args.save_path
         )
 
-    if args.wandb:
-        metrics = {"saved_best_checkpoint": saved_best}
-        if avg_val_nll is not None:
-            metrics.update(
-                final_online_train_nll=avg_train_nll,
-                final_online_train_bpd=bpd_train,
-                final_val_nll=avg_val_nll,
-                final_val_bpd=bpd_val,
-                best_val_nll=best_val_nll,
-            )
-        _log_wandb(metrics)
-
-
 @torch.inference_mode()
-def evaluate_circuit(
-    circuit, nll_fn, test_loader, device, num_dimensions, log_to_wandb=False
-):
+def evaluate_circuit(circuit, nll_fn, test_loader, device, num_dimensions):
     """Report test NLL and bits per dimension using the loaded checkpoint."""
     circuit.eval()
 
@@ -381,10 +353,6 @@ def evaluate_circuit(
     avg_test_bpd = avg_test_nll / (num_dimensions * np.log(2.0))
 
     logger.info("Test NLL: %.4f | bpd: %.4f", avg_test_nll, avg_test_bpd)
-
-    if log_to_wandb:
-        _log_wandb({"test_nll": avg_test_nll, "test_bpd": avg_test_bpd})
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train a PC on a discrete image dataset")
@@ -500,7 +468,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use Cirkit's torch-compile backend instead of the standard torch backend.",
     )
     add("--wandb", action="store_true")
-    add("--project", default="pc_dataset_eval")
+    add(
+        "--project",
+        help="W&B project; defaults to pc_<dataset>_<rg>_eval.",
+    )
 
     add("--seed", type=int, default=42)
     add("--split-seed", type=int, help="Fixed train/validation split seed; defaults to --seed.")
@@ -539,15 +510,17 @@ def main() -> None:
 
         method = "data-init" if args.use_estimated_weights else "random-init"
         comparison = f"{args.dataset}_{args.rg}_k{args.k}"
+        project = args.project or f"pc_{args.dataset}_{args.rg}_eval"
         run = wandb.init(
-            project=args.project,
-            name=f"{comparison}_{method}_seed{args.seed}",
+            project=project,
+            name=f"{method}_seed{args.seed}",
             group=comparison,
             job_type=method,
-            config={**vars(args), "initialization": method, "train_curve_max_samples": 1024},
+            tags=[args.dataset, args.rg, method],
+            config={**vars(args), "initialization": method, "comparison": comparison},
         )
         run.define_metric("step")
-        for metric in ("train_nll", "train_bpd", "val_nll", "val_bpd", "learning_rate"):
+        for metric in ("val_nll", "val_nll_relative"):
             run.define_metric(metric, step_metric="step")
     else:
         run = None
@@ -643,9 +616,7 @@ def main() -> None:
 
     circuit.load_state_dict(torch.load(args.save_path, map_location=device, weights_only=True))
 
-    evaluate_circuit(
-        circuit, nll, test_loader, device, num_dimensions, log_to_wandb=args.wandb
-    )
+    evaluate_circuit(circuit, nll, test_loader, device, num_dimensions)
     if run is not None:
         run.finish()
 

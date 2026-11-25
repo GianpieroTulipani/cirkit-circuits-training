@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 
-from scripts.run_learning_curves import configure_commands, run_queue
+from scripts.run_learning_curves import configure_commands, run_queue, select_commands
 
 
 class ParallelLauncherTests(unittest.TestCase):
@@ -36,6 +36,66 @@ class ParallelLauncherTests(unittest.TestCase):
         self.assertEqual(configured[configured.index("--progress-steps") + 1], "5")
         self.assertEqual(configured[configured.index("--project") + 1], "test-project")
         self.assertIn("_k32_", configured[configured.index("--save-path") + 1])
+
+    def test_selects_one_dataset_and_complete_initialization_pairs(self) -> None:
+        def command(dataset: str, rg: str, data_init: bool) -> list[str]:
+            result = [
+                sys.executable,
+                "-m",
+                "scripts.evaluate_image_circuit",
+                "--dataset",
+                dataset,
+                "--rg",
+                rg,
+                "--save-path",
+                f"{dataset}_{rg}_{data_init}.pt",
+            ]
+            if data_init:
+                result.append("--use-estimated-weights")
+            return result
+
+        matrix = [
+            command(dataset, rg, data_init)
+            for dataset in ("mnist", "cifar10")
+            for rg in ("quad-tree-2", "quad-graph")
+            for data_init in (True, False)
+        ]
+        selected = select_commands(
+            matrix, dataset="cifar10", region_graphs=["quad-graph"]
+        )
+        self.assertEqual(len(selected), 2)
+        self.assertTrue(
+            all(command[command.index("--dataset") + 1] == "cifar10" for command in selected)
+        )
+        self.assertEqual(
+            {"data" if "--use-estimated-weights" in command else "random" for command in selected},
+            {"data", "random"},
+        )
+
+    def test_project_template_is_resolved_per_dataset_and_rg(self) -> None:
+        command = [
+            sys.executable,
+            "-m",
+            "scripts.evaluate_image_circuit",
+            "--dataset",
+            "fashion-mnist",
+            "--rg",
+            "quad-tree-4",
+            "--save-path",
+            "fashion-mnist_quad-tree-4_data-init_k64_seed42.pt",
+        ]
+        configured = configure_commands(
+            [command],
+            k=None,
+            max_epochs=None,
+            validation_steps=None,
+            progress_steps=10,
+            project="pc_{dataset}_{rg}_eval",
+        )[0]
+        self.assertEqual(
+            configured[configured.index("--project") + 1],
+            "pc_fashion-mnist_quad-tree-4_eval",
+        )
 
     def test_run_queue_reports_process_progress_and_gpu_occupancy(self) -> None:
         child = """\

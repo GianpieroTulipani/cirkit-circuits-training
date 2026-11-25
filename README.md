@@ -23,13 +23,21 @@ Kaggle notebook for parallel learning-curve experiments on two T4 GPUs.
 The main parameters are:
 
 ```python
+DATASET = 'mnist'
+REGION_GRAPHS = ['quad-tree-2', 'quad-tree-4', 'quad-graph', 'chow-liu-tree']
 K_UNITS = 64
-TOTAL_EXPERIMENTS = 24
 EXPERIMENTS_PER_GPU = 4
 MAX_EPOCHS = 100
 LEARNING_CURVE_EVERY_STEPS = 250
 DASHBOARD_EVERY_STEPS = 10
+WANDB_PROJECT_TEMPLATE = 'pc_{dataset}_{rg}_eval'
 ```
+
+The dataset is selected before the matrix is scheduled. For each selected region
+graph, the launcher runs exactly two experiments (data initialization and random
+initialization) and sends them to a dedicated W&B project such as
+`pc_mnist_quad-graph_eval`. With the four default RGs, one campaign contains eight
+experiments.
 
 Kaggle supplies two physical T4 GPUs. With `EXPERIMENTS_PER_GPU = 4`, the launcher
 runs eight concurrent processes: four share GPU 0 and four share GPU 1. This does
@@ -58,8 +66,18 @@ Every run creates a timestamped directory under `/kaggle/working/results` contai
 - `run-status.json` with active step counts, GPU assignment and final results.
 
 `--progress-steps` controls only the notebook dashboard. W&B learning curves are
-controlled independently by `--validation-steps` and include step 0, periodic
-train/validation NLL and BPD, learning rate, and the final step.
+controlled independently by `--validation-steps` and include step 0 and the final
+step. Only two history metrics are sent to W&B: raw validation NLL (`val_nll`) and
+validation NLL divided by its value at step 0 (`val_nll_relative`). The raw curve
+preserves the initialization advantage; the relative curve starts at 1 for both
+runs and makes their optimization speed readable when the raw starting values are
+very different.
+
+For presentation, keep the raw panel from step 0 instead of deleting early points.
+Use a logarithmic Y axis for the full trajectory, or show it as a small inset next
+to a linear zoom of the convergence region. Treat `val_nll_relative` as the second
+view: it answers how quickly each optimizer reduces its own starting loss, while
+`val_nll` answers which model is actually better at a given step.
 
 ## Local usage
 
@@ -85,18 +103,19 @@ python -m scripts.evaluate_image_circuit \
 
 Remove `--use-estimated-weights` for random initialization.
 
-Run the full matrix directly from a two-GPU environment:
+Run every initialization pair for one dataset directly from a two-GPU environment:
 
 ```bash
 python -m scripts.run_learning_curves \
     --gpus 0 1 \
     --jobs-per-gpu 4 \
-    --max-experiments 24 \
+    --dataset mnist \
+    --region-graphs quad-tree-2 quad-tree-4 quad-graph chow-liu-tree \
     --k 64 \
     --max-epochs 100 \
     --validation-steps 250 \
     --progress-steps 10 \
-    --project pc_dataset_eval
+    --project-template 'pc_{dataset}_{rg}_eval'
 ```
 
 Use `--dry-run` for a compact configuration summary without downloading data or
