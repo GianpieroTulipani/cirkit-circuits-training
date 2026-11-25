@@ -4,10 +4,23 @@ import sys
 import tempfile
 import unittest
 
-from scripts.run_learning_curves import configure_commands, run_queue, select_commands
+from scripts.run_learning_curves import (
+    DEFAULT_JOBS_PER_GPU,
+    DEFAULT_K,
+    REGION_GRAPHS,
+    configure_commands,
+    run_queue,
+    select_commands,
+)
 
 
 class ParallelLauncherTests(unittest.TestCase):
+    def test_campaign_defaults_use_three_region_graphs_and_six_slots(self) -> None:
+        self.assertEqual(REGION_GRAPHS, ("quad-tree-2", "quad-tree-4", "quad-graph"))
+        self.assertNotIn("chow-liu-tree", REGION_GRAPHS)
+        self.assertEqual(DEFAULT_JOBS_PER_GPU, 3)
+        self.assertEqual(DEFAULT_K, 128)
+
     def test_configure_commands_overrides_k_and_budgets(self) -> None:
         command = [
             sys.executable,

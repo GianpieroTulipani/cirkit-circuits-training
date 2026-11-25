@@ -15,7 +15,9 @@ import time
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROGRESS_RE = re.compile(r"EXPERIMENT_PROGRESS step=(\d+) max_steps=(\d+)")
 DATASETS = ("mnist", "fashion-mnist", "cifar10")
-REGION_GRAPHS = ("quad-tree-2", "quad-tree-4", "quad-graph", "chow-liu-tree")
+REGION_GRAPHS = ("quad-tree-2", "quad-tree-4", "quad-graph")
+DEFAULT_JOBS_PER_GPU = 3
+DEFAULT_K = 128
 
 
 def notebook_commands(notebook: Path) -> list[list[str]]:
@@ -372,7 +374,7 @@ def run_queue(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gpus", nargs="+", default=["0", "1"])
-    parser.add_argument("--jobs-per-gpu", type=int, default=2)
+    parser.add_argument("--jobs-per-gpu", type=int, default=DEFAULT_JOBS_PER_GPU)
     parser.add_argument(
         "--dataset",
         choices=DATASETS,
@@ -391,7 +393,12 @@ def main() -> int:
         type=int,
         help="Optional even debug cap; full campaigns should omit it.",
     )
-    parser.add_argument("--k", type=int, help="Override k for every selected experiment.")
+    parser.add_argument(
+        "--k",
+        type=int,
+        default=DEFAULT_K,
+        help="Number of units for every selected experiment.",
+    )
     parser.add_argument("--max-epochs", type=int, help="Override the notebook epoch budget.")
     parser.add_argument("--validation-steps", type=int)
     parser.add_argument(

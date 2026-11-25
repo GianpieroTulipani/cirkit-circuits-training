@@ -7,7 +7,8 @@ Kaggle notebook for parallel learning-curve experiments on two T4 GPUs.
 
 - `scripts/evaluate_image_circuit.py`: trains and evaluates one experiment.
 - `scripts/run_learning_curves.py`: schedules several experiments across GPUs.
-- `notebooks/data-driven-initialization.ipynb`: defines the 24-experiment matrix.
+- `notebooks/data-driven-initialization.ipynb`: defines the experiment commands and
+  preserves historical outputs.
 - `notebooks/kaggle-parallel-learning-curves.ipynb`: interactive Kaggle entry point.
 - `tests/test_parallel_launcher.py`: tests configuration overrides, scheduling and
   progress reporting without requiring GPUs.
@@ -24,9 +25,9 @@ The main parameters are:
 
 ```python
 DATASET = 'mnist'
-REGION_GRAPHS = ['quad-tree-2', 'quad-tree-4', 'quad-graph', 'chow-liu-tree']
-K_UNITS = 64
-EXPERIMENTS_PER_GPU = 4
+REGION_GRAPHS = ['quad-tree-2', 'quad-tree-4', 'quad-graph']
+K_UNITS = 128
+EXPERIMENTS_PER_GPU = 3
 MAX_EPOCHS = 100
 LEARNING_CURVE_EVERY_STEPS = 250
 DASHBOARD_EVERY_STEPS = 10
@@ -36,12 +37,12 @@ WANDB_PROJECT_TEMPLATE = 'pc_{dataset}_{rg}_eval'
 The dataset is selected before the matrix is scheduled. For each selected region
 graph, the launcher runs exactly two experiments (data initialization and random
 initialization) and sends them to a dedicated W&B project such as
-`pc_mnist_quad-graph_eval`. With the four default RGs, one campaign contains eight
+`pc_mnist_quad-graph_eval`. With the three supported RGs, one campaign contains six
 experiments.
 
-Kaggle supplies two physical T4 GPUs. With `EXPERIMENTS_PER_GPU = 4`, the launcher
-runs eight concurrent processes: four share GPU 0 and four share GPU 1. This does
-not create eight GPUs. If memory is exhausted or throughput gets worse, reduce the
+Kaggle supplies two physical T4 GPUs. With `EXPERIMENTS_PER_GPU = 3`, the launcher
+runs six concurrent processes: three share GPU 0 and three share GPU 1. This does
+not create six GPUs. If memory is exhausted or throughput gets worse, reduce the
 value to 2 or 1.
 
 The notebook checks the GPU count, installs the repository requirements, authenticates
@@ -95,10 +96,10 @@ python -m scripts.evaluate_image_circuit \
     --input-sharing none --ycc none \
     --activation none --inner-layer cp --use-mixing-weights \
     --use-estimated-weights --alpha 5.0 --noise-scale 2.0 \
-    --k 64 --seed 42 --split-seed 42 \
+    --k 128 --seed 42 --split-seed 42 \
     --max-epochs 100 --patience 5 \
     --wandb --validation-steps 250 --progress-steps 10 \
-    --save-path mnist_quad-tree-2_data-init_k64_seed42.pt
+    --save-path mnist_quad-tree-2_data-init_k128_seed42.pt
 ```
 
 Remove `--use-estimated-weights` for random initialization.
@@ -108,10 +109,10 @@ Run every initialization pair for one dataset directly from a two-GPU environmen
 ```bash
 python -m scripts.run_learning_curves \
     --gpus 0 1 \
-    --jobs-per-gpu 4 \
+    --jobs-per-gpu 3 \
     --dataset mnist \
-    --region-graphs quad-tree-2 quad-tree-4 quad-graph chow-liu-tree \
-    --k 64 \
+    --region-graphs quad-tree-2 quad-tree-4 quad-graph \
+    --k 128 \
     --max-epochs 100 \
     --validation-steps 250 \
     --patience 5 \
