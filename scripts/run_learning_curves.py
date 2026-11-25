@@ -42,6 +42,12 @@ def _set_option(command: list[str], option: str, value: object) -> None:
         command.extend((option, str(value)))
 
 
+def _remove_flag(command: list[str], flag: str) -> None:
+    """Remove every occurrence of a boolean CLI flag."""
+    while flag in command:
+        command.remove(flag)
+
+
 def _checkpoint_name(command: list[str]) -> str:
     return Path(command[command.index("--save-path") + 1]).stem
 
@@ -105,6 +111,7 @@ def configure_commands(
     k: int | None,
     max_epochs: int | None,
     validation_steps: int | None,
+    patience: int,
     progress_steps: int,
     project: str | None,
 ) -> list[list[str]]:
@@ -124,6 +131,10 @@ def configure_commands(
             _set_option(command, "--max-epochs", max_epochs)
         if validation_steps is not None:
             _set_option(command, "--validation-steps", validation_steps)
+        # Campaigns always keep early stopping active, even if an older source
+        # notebook command explicitly disabled it.
+        _remove_flag(command, "--no-early-stopping")
+        _set_option(command, "--patience", patience)
         _set_option(command, "--progress-steps", progress_steps)
         if project is not None:
             _set_option(command, "--project", _format_project(project, command))
@@ -383,6 +394,12 @@ def main() -> int:
     parser.add_argument("--k", type=int, help="Override k for every selected experiment.")
     parser.add_argument("--max-epochs", type=int, help="Override the notebook epoch budget.")
     parser.add_argument("--validation-steps", type=int)
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=5,
+        help="Early-stop after this many validation checks without improvement.",
+    )
     parser.add_argument("--progress-steps", type=int, default=10)
     project_group = parser.add_mutually_exclusive_group()
     project_group.add_argument(
@@ -419,6 +436,7 @@ def main() -> int:
         "k",
         "max_epochs",
         "validation_steps",
+        "patience",
         "progress_steps",
     ):
         value = getattr(args, option)
@@ -446,6 +464,7 @@ def main() -> int:
         k=args.k,
         max_epochs=args.max_epochs,
         validation_steps=args.validation_steps,
+        patience=args.patience,
         progress_steps=args.progress_steps,
         project=args.project or args.project_template,
     )
@@ -460,6 +479,7 @@ def main() -> int:
     )
     projects = sorted({_option_value(command, "--project") for command in commands})
     print("W&B projects: " + ", ".join(projects))
+    print(f"Early stopping: enabled; patience={args.patience} validation checks")
     print(
         "Physical GPUs: "
         f"{len(args.gpus)}; concurrent experiments: {len(slots)} "

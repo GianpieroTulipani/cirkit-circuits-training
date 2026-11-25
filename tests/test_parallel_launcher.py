@@ -19,6 +19,7 @@ class ParallelLauncherTests(unittest.TestCase):
             "100",
             "--validation-steps",
             "100",
+            "--no-early-stopping",
             "--save-path",
             "mnist_data-init_k64_seed42.pt",
         ]
@@ -27,12 +28,15 @@ class ParallelLauncherTests(unittest.TestCase):
             k=32,
             max_epochs=3,
             validation_steps=20,
+            patience=7,
             progress_steps=5,
             project="test-project",
         )[0]
         self.assertEqual(configured[configured.index("--k") + 1], "32")
         self.assertEqual(configured[configured.index("--max-epochs") + 1], "3")
         self.assertEqual(configured[configured.index("--validation-steps") + 1], "20")
+        self.assertEqual(configured[configured.index("--patience") + 1], "7")
+        self.assertNotIn("--no-early-stopping", configured)
         self.assertEqual(configured[configured.index("--progress-steps") + 1], "5")
         self.assertEqual(configured[configured.index("--project") + 1], "test-project")
         self.assertIn("_k32_", configured[configured.index("--save-path") + 1])
@@ -89,6 +93,7 @@ class ParallelLauncherTests(unittest.TestCase):
             k=None,
             max_epochs=None,
             validation_steps=None,
+            patience=5,
             progress_steps=10,
             project="pc_{dataset}_{rg}_eval",
         )[0]

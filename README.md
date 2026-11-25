@@ -96,7 +96,7 @@ python -m scripts.evaluate_image_circuit \
     --activation none --inner-layer cp --use-mixing-weights \
     --use-estimated-weights --alpha 5.0 --noise-scale 2.0 \
     --k 64 --seed 42 --split-seed 42 \
-    --max-epochs 100 --no-early-stopping \
+    --max-epochs 100 --patience 5 \
     --wandb --validation-steps 250 --progress-steps 10 \
     --save-path mnist_quad-tree-2_data-init_k64_seed42.pt
 ```
@@ -114,13 +114,15 @@ python -m scripts.run_learning_curves \
     --k 64 \
     --max-epochs 100 \
     --validation-steps 250 \
+    --patience 5 \
     --progress-steps 10 \
     --project-template 'pc_{dataset}_{rg}_eval'
 ```
 
 Use `--dry-run` for a compact configuration summary without downloading data or
 starting training. Add `--list-commands` only when the full generated command list
-is needed.
+is needed. Early stopping remains enabled in every generated command; `--patience`
+counts validation checks without improvement, not optimizer steps.
 
 ## Reproducibility
 
