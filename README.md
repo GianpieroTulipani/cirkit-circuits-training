@@ -68,17 +68,14 @@ Every run creates a timestamped directory under `/kaggle/working/results` contai
 
 `--progress-steps` controls only the notebook dashboard. W&B learning curves are
 controlled independently by `--validation-steps` and include step 0 and the final
-step. Only two history metrics are sent to W&B: raw validation NLL (`val_nll`) and
-validation NLL divided by its value at step 0 (`val_nll_relative`). The raw curve
-preserves the initialization advantage; the relative curve starts at 1 for both
-runs and makes their optimization speed readable when the raw starting values are
-very different.
+step. The only history metric sent to W&B is the absolute validation NLL
+(`val_nll`), which preserves the initialization advantage and allows direct
+comparison between data-init and random-init.
 
 For presentation, keep the raw panel from step 0 instead of deleting early points.
 Use a logarithmic Y axis for the full trajectory, or show it as a small inset next
-to a linear zoom of the convergence region. Treat `val_nll_relative` as the second
-view: it answers how quickly each optimizer reduces its own starting loss, while
-`val_nll` answers which model is actually better at a given step.
+to a linear zoom of the convergence region. This keeps the very different starting
+values visible while making the final convergence region readable.
 
 ## Local usage
 

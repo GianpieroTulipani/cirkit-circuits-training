@@ -239,7 +239,6 @@ def train_circuit(
     total_steps = 0
     avg_val_nll = None
     saved_best = False
-    initial_val_nll = None
 
     def emit_progress(step: int) -> None:
         """Emit a stable line that the multi-GPU launcher can parse."""
@@ -249,16 +248,7 @@ def train_circuit(
         )
 
     def log_curves(step: int, val_nll: float) -> None:
-        nonlocal initial_val_nll
-        if initial_val_nll is None:
-            initial_val_nll = val_nll
-        _log_wandb(
-            {
-                "step": step,
-                "val_nll": val_nll,
-                "val_nll_relative": val_nll / initial_val_nll,
-            }
-        )
+        _log_wandb({"step": step, "val_nll": val_nll})
 
     if args.wandb:
         circuit.eval()
@@ -520,8 +510,7 @@ def main() -> None:
             config={**vars(args), "initialization": method, "comparison": comparison},
         )
         run.define_metric("step")
-        for metric in ("val_nll", "val_nll_relative"):
-            run.define_metric(metric, step_metric="step")
+        run.define_metric("val_nll", step_metric="step")
     else:
         run = None
 
